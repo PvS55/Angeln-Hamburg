@@ -1,0 +1,110 @@
+export type DataSource = 'waterapi' | 'fischinfo_nrw' | 'anglermap' | 'hejfish' | 'alleangeln' | 'unknown';
+
+export type KnownFishSpecies =
+  | 'zander'
+  | 'hecht'
+  | 'barsch'
+  | 'karpfen'
+  | 'aal'
+  | 'brasse'
+  | 'rotauge'
+  | 'forelle'
+  | 'wels';
+
+export type FishSpecies = KnownFishSpecies | (string & { readonly __fishSpecies?: never });
+
+export type WaterBodyType = 'river' | 'lake' | 'canal' | 'pond' | 'sea';
+export type DataQuality = 'high' | 'medium' | 'low' | 'unknown';
+
+export interface WaterMapPoint {
+  lat: number;
+  lng: number;
+}
+
+export interface WaterMapGeometry {
+  polygons: WaterMapPoint[][];
+  lines: WaterMapPoint[][];
+  points: WaterMapPoint[];
+}
+
+export interface SpeciesConfidence {
+  species: FishSpecies;
+  displayName?: string;
+  confidence: number;
+  source: DataSource;
+  lastUpdated: Date;
+  notes?: string;
+}
+
+export interface WaterBodyProfile {
+  id: string;
+  name: string;
+  type: WaterBodyType;
+  latitude: number;
+  longitude: number;
+  region: string;
+  species: SpeciesConfidence[];
+  description?: string;
+  imageUrl?: string;
+  depth?: {
+    average?: number;
+    max?: number;
+    unit: 'm';
+  };
+  regulations?: {
+    permit_required: boolean;
+    closed_seasons?: Array<{ species: FishSpecies; start: string; end: string }>;
+    size_limits?: Array<{ species: FishSpecies; min_cm: number }>;
+    bag_limits?: Array<{ species: FishSpecies; daily_limit: number }>;
+  };
+  dataQuality: DataQuality;
+  sources: DataSource[];
+  links?: Array<{
+    label: string;
+    url: string;
+    kind: 'permit' | 'info' | 'community';
+  }>;
+  areaDetails?: {
+    waterSizeHa?: number;
+    mapGeometry?: WaterMapGeometry;
+    locationInfo?: string[];
+    season?: string;
+    techniques?: string[];
+    properties?: string[];
+    rulesText?: string;
+    rulesFiles?: Array<{ name: string; url: string }>;
+    mobileTicket?: boolean;
+    printRequired?: boolean;
+    tickets?: Array<{ name: string; price?: string }>;
+    ticketTypes?: unknown[];
+    features?: string[];
+    stats?: {
+      followers?: number;
+      catches?: number;
+      images?: number;
+    };
+    manager?: {
+      name?: string;
+      phone?: string;
+      email?: string;
+      website?: string;
+      logoUrl?: string;
+    };
+  };
+  lastUpdated: Date;
+}
+
+export interface WaterDataProvider {
+  name: string;
+  priority: number;
+  canHandleRegion(lat: number, lng: number): boolean;
+  getWaterBodyProfile(lat: number, lng: number, radius?: number): Promise<WaterBodyProfile | null>;
+  searchWaterBodies(query: string, region?: string): Promise<WaterBodyProfile[]>;
+}
+
+export interface CacheEntry {
+  key: string;
+  data: WaterBodyProfile;
+  cachedAt: Date;
+  expiresAt: Date;
+}

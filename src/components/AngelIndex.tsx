@@ -1,0 +1,144 @@
+import React from 'react';
+import InfoTooltip from './InfoTooltip';
+import type { HechtScoreDetails } from '../utils/calculations';
+
+export type FishPresenceHint = {
+  tone: 'good' | 'warn' | 'neutral';
+  title: string;
+  text: string;
+};
+
+interface AngelIndexProps {
+  score: number;
+  loading: boolean;
+  fishLabel?: string;
+  scoreDetails?: HechtScoreDetails | null;
+  fishPresenceHint?: FishPresenceHint | null;
+}
+
+const hintToneClasses: Record<FishPresenceHint['tone'], string> = {
+  good: 'border-emerald-500/35 bg-emerald-500/10 text-emerald-100',
+  warn: 'border-yellow-500/35 bg-yellow-500/10 text-yellow-100',
+  neutral: 'border-slate-700 bg-slate-950/35 text-slate-200',
+};
+
+const hintBadgeClasses: Record<FishPresenceHint['tone'], string> = {
+  good: 'bg-emerald-500/20 text-emerald-200',
+  warn: 'bg-yellow-500/20 text-yellow-100',
+  neutral: 'bg-slate-700/70 text-slate-200',
+};
+
+const AngelIndex: React.FC<AngelIndexProps> = ({
+  score,
+  loading,
+  fishLabel = 'Zander',
+  scoreDetails,
+  fishPresenceHint,
+}) => {
+  const getStatus = (s: number) => {
+    if (s >= 75) return { color: 'text-angel-green', bg: 'bg-angel-green/20', text: 'Sehr gut — raus gehen!' };
+    if (s >= 55) return { color: 'text-angel-light', bg: 'bg-angel-light/20', text: 'Gut — lohnender Ausflug' };
+    if (s >= 40) return { color: 'text-angel-yellow', bg: 'bg-angel-yellow/20', text: 'Mittel — möglich, aber zäh' };
+    return { color: 'text-angel-red', bg: 'bg-angel-red/20', text: 'Schlecht — besser morgen' };
+  };
+
+  const status = getStatus(score);
+  const isClosedSeason = Boolean(scoreDetails?.legal.schonzeitAktiv);
+
+  if (loading) {
+    return (
+      <div className="card flex flex-col items-center justify-center min-h-[250px] animate-pulse">
+        <div className="w-32 h-32 rounded-full border-4 border-slate-700 border-t-blue-500 animate-spin"></div>
+        <p className="mt-4 text-slate-400">Berechne Angel-Index...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card flex flex-col items-center justify-center py-8 relative overflow-visible">
+      <div className={`absolute top-0 left-0 w-full h-1 ${status.bg.replace('/20', '')}`}></div>
+      
+      <h3 className="text-slate-400 font-medium mb-2 uppercase tracking-wider text-sm">{fishLabel}-Index Hamburg</h3>
+      
+      <div className={`relative flex items-center justify-center w-40 h-40 rounded-full border-8 border-slate-700/50 ${status.color}`}>
+        <div className="text-6xl font-black">{score}</div>
+        <div className="absolute inset-0 rounded-full border-8 border-current border-t-transparent animate-score opacity-30"></div>
+      </div>
+      
+      <div className={`mt-6 px-4 py-2 rounded-full font-bold text-lg ${status.color} ${status.bg}`}>
+        {status.text}
+      </div>
+
+      {fishPresenceHint && (
+        <div className={`mt-4 w-full rounded-xl border p-3 text-left ${hintToneClasses[fishPresenceHint.tone]}`}>
+          <div className="flex items-start gap-3">
+            <span className={`mt-0.5 shrink-0 rounded-md px-2 py-1 text-[9px] font-black uppercase tracking-wider ${hintBadgeClasses[fishPresenceHint.tone]}`}>
+              Gewässer
+            </span>
+            <div className="min-w-0">
+              <p className="text-xs font-black uppercase tracking-widest">{fishPresenceHint.title}</p>
+              <p className="mt-1 text-xs font-semibold leading-relaxed opacity-90">
+                {fishPresenceHint.text}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isClosedSeason && (
+        <div className="mt-4 w-full rounded-xl border border-red-500/40 bg-red-500/10 p-3 text-left shadow-[0_0_24px_rgba(239,68,68,0.12)]">
+          <div className="flex items-start gap-3">
+            <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-red-500/20 text-sm font-black text-red-200">
+              !
+            </span>
+            <div className="min-w-0">
+              <p className="text-xs font-black uppercase tracking-widest text-red-300">Schonzeit aktiv</p>
+              <p className="mt-1 text-xs font-semibold leading-relaxed text-red-100">
+                {scoreDetails?.legal.hinweis || `Der ${fishLabel}-Score zeigt die aktuellen biologischen Bedingungen. Bitte nicht gezielt auf ${fishLabel} angeln.`}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {scoreDetails && (
+        <div className="mt-5 w-full grid grid-cols-2 gap-2 text-xs">
+          <div className="bg-slate-950/40 border border-slate-800 rounded-lg p-2">
+            <span className="flex items-center gap-1 text-[9px] text-slate-500 uppercase font-bold">
+              Konfidenz
+              <InfoTooltip text="Der Unsicherheitsbereich des Scores. +/-6 bedeutet: Die realistische Spanne liegt ungefähr 6 Punkte über oder unter dem angezeigten Wert." />
+            </span>
+            <span className="font-black text-slate-100">+/-{scoreDetails.confidence}</span>
+          </div>
+          <div className="bg-slate-950/40 border border-slate-800 rounded-lg p-2">
+            <span className="flex items-center gap-1 text-[9px] text-slate-500 uppercase font-bold">
+              Prime Window
+              <InfoTooltip text="Das beste Zeitfenster laut Score. Bei Kenterfenstern ist die Phase um den Strömungswechsel gemeint, weil Beutefische und Räuber neu positionieren." />
+            </span>
+            <span className="font-black text-slate-100">{scoreDetails.primeWindow}</span>
+          </div>
+          <div className="bg-slate-950/40 border border-slate-800 rounded-lg p-2">
+            <span className="flex items-center gap-1 text-[9px] text-slate-500 uppercase font-bold">
+              Chance
+              <InfoTooltip text={`Eine grobe, aus dem ${fishLabel}-Score abgeleitete biologische Aktivitäts-Schätzung. Das ist kein Fangversprechen und ersetzt keine lokale Erfahrung.`} />
+            </span>
+            <span className="font-black text-slate-100">{scoreDetails.probability}</span>
+          </div>
+          <div className="bg-slate-950/40 border border-slate-800 rounded-lg p-2">
+            <span className="flex items-center gap-1 text-[9px] text-slate-500 uppercase font-bold">
+              Bonus
+              <InfoTooltip text="Multiplikativer Synergie-Faktor. Positive Kombinationen wie fallender Druck plus passendes Zeit- oder Tidefenster erhöhen den Gesamtscore." />
+            </span>
+            <span className="font-black text-slate-100">{scoreDetails.interactionBonus > 0 ? '+' : ''}{scoreDetails.interactionBonus}%</span>
+          </div>
+        </div>
+      )}
+      
+      <p className="mt-4 text-slate-400 text-sm italic text-center px-4">
+        {scoreDetails ? `${fishLabel}-Scoring aus Temperatur, Drucktrend, Tide, Licht, Wind und Synergien.` : 'Basierend auf Tide, Luftdruck, Temperatur, Wind und Mond.'}
+      </p>
+    </div>
+  );
+};
+
+export default AngelIndex;
