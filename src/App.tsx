@@ -233,7 +233,7 @@ const App: React.FC = () => {
             <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">
               Hamburg - {headerDate}
             </p>
-            <h1 className="text-3xl font-black text-white tracking-tight">ZanderHunter</h1>
+            <h1 className="text-3xl font-black text-white tracking-tight">Angeln Hamburg</h1>
           </div>
           <AuthMenu />
         </div>

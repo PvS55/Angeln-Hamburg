@@ -1,4 +1,4 @@
-# ZanderHunter Hamburg 🎣
+# Angeln Hamburg 🎣
 
 Eine progressive Web-App (PWA) für Zander-Angler in Hamburg. Die App liefert Echtzeit-Daten zu Tide, Wetter und Beißzeiten, um den optimalen Angel-Moment nicht zu verpassen.
 

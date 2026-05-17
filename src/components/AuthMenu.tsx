@@ -233,7 +233,7 @@ const AuthMenu: React.FC = () => {
         <div className="absolute right-0 top-12 z-50 w-[min(88vw,22rem)] rounded-lg border border-slate-700 bg-slate-900 p-4 shadow-2xl shadow-slate-950/70">
           <div className="mb-3 flex items-start justify-between gap-3">
             <div>
-              <p className="text-[10px] font-black uppercase tracking-widest text-emerald-300">ZanderHunter</p>
+              <p className="text-[10px] font-black uppercase tracking-widest text-emerald-300">Angeln Hamburg</p>
               <h2 className="mt-1 text-lg font-black text-white">{title}</h2>
             </div>
             <button

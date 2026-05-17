@@ -7,7 +7,7 @@ export default defineConfig({
   plugins: [react()],
   // WICHTIG: base muss dem GitHub-Repo-Namen entsprechen
   // Das Repo heißt 'ZanderHunter'
-  base: process.env.VITE_BASE_URL || '/ZanderHunter/',
+  base: process.env.VITE_BASE_URL || '/Angeln-Hamburg/',
   build: {
     outDir: 'dist',
     sourcemap: true,
