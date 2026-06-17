@@ -1,4 +1,5 @@
 import SunCalc from 'suncalc';
+import { getLocalFishRule } from '../data/fishRegulations';
 import type { DataQuality, FishSpecies, WaterBodyProfile } from '../types/waterData';
 
 export interface AngelConditions {
@@ -170,6 +171,8 @@ export interface HechtScoreInput extends AngelConditions {
   depth?: number;
   waterProfile?: WaterBodyProfile | null;
   targetFish?: TargetFish;
+  lat?: number;
+  lng?: number;
 }
 
 export interface HechtScoreDetails {
@@ -188,6 +191,10 @@ export interface HechtScoreDetails {
     entnahmefenster: string;
     baglimit: number | null;
     hinweis: string;
+    bundesland: string;
+    schonzeit: string;
+    quelle: string;
+    sourceUrl: string;
   };
   waterProfile?: {
     name: string;
@@ -226,9 +233,41 @@ export function getHamburgPredatorRules(fish: TargetFish, date: Date = new Date(
     schonzeitAktiv,
     entnahmefenster: fish === 'barsch' ? '10-35 cm' : '45-75 cm',
     baglimit: fish === 'barsch' ? null : 2,
+    bundesland: 'Hamburg',
+    schonzeit: fish === 'barsch' ? 'keine' : '01.02.-31.05.',
+    quelle: 'Hamburg',
+    sourceUrl: 'https://angelmagazin.de/schonzeiten/hamburg/',
     hinweis: fish === 'barsch'
       ? 'Keine generelle Barsch-Schonzeit in ASV-Hamburg-Gewässern. Lokale Kunstköderverbote während Raubfisch-Schonzeiten beachten.'
       : schonzeitAktiv ? 'SCHONZEIT AKTIV: gezieltes Angeln aussetzen.' : 'Fischerei frei nach Hamburger Regeln.'
+  };
+}
+
+export function getLocationPredatorRules(
+  fish: TargetFish,
+  date: Date = new Date(),
+  profile?: WaterBodyProfile | null,
+  lat: number = (profile as { latitude?: number } | null)?.latitude ?? 53.55,
+  lng: number = (profile as { longitude?: number } | null)?.longitude ?? 9.99
+) {
+  const rule = getLocalFishRule(fish, profile, lat, lng, date);
+  const entnahmefenster = rule.minimumCm === null
+    ? 'kein Mindestmass'
+    : rule.maximumCm
+      ? `${rule.minimumCm}-${rule.maximumCm} cm`
+      : `ab ${rule.minimumCm} cm`;
+
+  return {
+    schonzeitAktiv: rule.closedNow,
+    entnahmefenster,
+    baglimit: rule.bagLimit ?? null,
+    bundesland: rule.sourceLabel,
+    schonzeit: rule.closedSeasonText,
+    quelle: rule.sourceLabel,
+    sourceUrl: rule.sourceUrl,
+    hinweis: rule.closedNow
+      ? `SCHONZEIT AKTIV in ${rule.sourceLabel}: ${rule.fishLabel} nicht gezielt befischen. ${rule.note || ''}`.trim()
+      : `${rule.fishLabel} nach ${rule.sourceLabel}: Schonzeit ${rule.closedSeasonText}, Mass ${entnahmefenster}. ${rule.note || ''}`.trim()
   };
 }
 
@@ -273,7 +312,7 @@ function applyWaterProfileContext(
   fish: TargetFish,
   total: number,
   confidence: number,
-  rules: ReturnType<typeof getHamburgPredatorRules>
+  rules: ReturnType<typeof getLocationPredatorRules>
 ) {
   const profile = input.waterProfile;
   if (!profile) {
@@ -504,7 +543,7 @@ function getZanderPrimeWindow(input: HechtScoreInput) {
 
 export function calculateZanderIndex(input: HechtScoreInput): PredatorScoreDetails {
   const date = input.date || new Date();
-  const rules = getHamburgPredatorRules('zander', date);
+  const rules = getLocationPredatorRules('zander', date, input.waterProfile, input.lat, input.lng);
   const temperatur = calculateZanderTemperatureScore(input.wasserTemp);
   const barometerResult = calculateZanderBarometerScore(input);
   const hydrologie = calculateZanderHydroScore(input);
@@ -553,7 +592,7 @@ export function calculateZanderIndex(input: HechtScoreInput): PredatorScoreDetai
 
 export function calculateBarschIndex(input: HechtScoreInput): PredatorScoreDetails {
   const date = input.date || new Date();
-  const rules = getHamburgPredatorRules('barsch', date);
+  const rules = getLocationPredatorRules('barsch', date, input.waterProfile, input.lat, input.lng);
   const pressureResult = calculateBarschPressureScore(input);
   const temperature = calculateBarschTemperatureScore(input.wasserTemp, date);
   const lightResult = calculateBarschLightScore(input);
@@ -728,7 +767,7 @@ function getPrimeWindow(input: HechtScoreInput) {
 
 export function calculateHechtIndex(input: HechtScoreInput): HechtScoreDetails {
   const date = input.date || new Date();
-  const rules = getHamburgPredatorRules('hecht', date);
+  const rules = getLocationPredatorRules('hecht', date, input.waterProfile, input.lat, input.lng);
   const temperatur = calculateHechtTemperatureScore(input.wasserTemp);
   const barometerResult = calculateHechtBarometerScore(input);
   const hydrologyResult = calculateHechtHydroScore(input);

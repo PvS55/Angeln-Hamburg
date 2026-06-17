@@ -56,9 +56,12 @@ const HechtInfo: React.FC<HechtInfoProps> = ({ scoreDetails, fishLabel = 'Hecht'
   const sizeDisplay = maxSize ? `${minSize}-${maxSize}` : entnahmefenster;
   const unitDisplay = maxSize ? 'cm' : '';
 
+  const localLabel = scoreDetails?.legal.bundesland || 'lokal';
+  const closedSeason = scoreDetails?.legal.schonzeit || 'keine';
+
   return (
     <div className="space-y-4 pt-4">
-      <h3 className="text-slate-400 font-medium uppercase tracking-wider text-sm px-1">{fishLabel}-Info Hamburg</h3>
+      <h3 className="text-slate-400 font-medium uppercase tracking-wider text-sm px-1">{fishLabel}-Info {localLabel}</h3>
 
       <div className={`card border-l-4 ${isSchonzeit ? 'border-l-red-500 bg-red-500/5' : 'border-l-green-500 bg-green-500/5'}`}>
         <div className="flex justify-between items-start gap-4">
@@ -73,7 +76,7 @@ const HechtInfo: React.FC<HechtInfoProps> = ({ scoreDetails, fishLabel = 'Hecht'
           </div>
           <div className="text-right">
             <span className="text-[10px] text-slate-500 uppercase block">Zeitraum</span>
-            <span className="text-xs font-bold text-slate-300">{targetFish === 'barsch' ? 'keine' : '01.02. - 31.05.'}</span>
+            <span className="text-xs font-bold text-slate-300">{closedSeason}</span>
           </div>
         </div>
 
@@ -103,8 +106,8 @@ const HechtInfo: React.FC<HechtInfoProps> = ({ scoreDetails, fishLabel = 'Hecht'
             <InfoTooltip text={copy.limitInfo} />
           </span>
           <div className="flex items-baseline space-x-1">
-            <span className="text-2xl font-black text-slate-100">{targetFish === 'barsch' ? '-' : scoreDetails?.legal.baglimit || 2}</span>
-            {targetFish !== 'barsch' && <span className="text-xs text-slate-500 font-bold uppercase">Stück</span>}
+            <span className="text-2xl font-black text-slate-100">{scoreDetails?.legal.baglimit ?? '-'}</span>
+            {scoreDetails?.legal.baglimit && <span className="text-xs text-slate-500 font-bold uppercase">Stück</span>}
           </div>
           <p className="text-[9px] text-slate-500 mt-1">{copy.limitInfo}</p>
         </div>

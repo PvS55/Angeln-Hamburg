@@ -1,5 +1,14 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { HejfishAreaLite } from '../types/hejfishArea';
+import {
+  fetchHamburgFishingOverlay,
+  getPermissionTone,
+  HAMBURG_FISHING_OVERLAY_SOURCE,
+  intersectsHamburg,
+  type GeoJsonGeometry,
+  type HamburgFishingFeature,
+  type MapBounds,
+} from '../services/hamburgFishingOverlay';
 
 interface LocationPickerMapProps {
   center: {
@@ -18,6 +27,19 @@ interface DragState {
   moved: boolean;
 }
 
+interface PointerPosition {
+  x: number;
+  y: number;
+}
+
+interface PinchState {
+  pointerIds: [number, number];
+  startDistance: number;
+  startFocusWorldX: number;
+  startFocusWorldY: number;
+  startZoom: number;
+}
+
 interface WaterCluster {
   key: string;
   lat: number;
@@ -26,10 +48,16 @@ interface WaterCluster {
   areas: HejfishAreaLite[];
 }
 
+interface ProjectedOverlayPath {
+  id: string;
+  feature: HamburgFishingFeature;
+  d: string;
+}
+
 const tileSize = 256;
 const minZoom = 5;
 const maxZoom = 17;
-const mapHeight = 280;
+const mapHeight = 420;
 const singleMarkerZoom = 13;
 
 function clamp(value: number, min: number, max: number) {
@@ -71,12 +99,68 @@ function isWaterMarkerTarget(target: EventTarget | null) {
   return target instanceof Element && Boolean(target.closest('[data-water-marker="true"]'));
 }
 
+function getPointerDistance(first: PointerPosition, second: PointerPosition) {
+  return Math.hypot(first.x - second.x, first.y - second.y);
+}
+
+function getPointerMidpoint(first: PointerPosition, second: PointerPosition) {
+  return {
+    x: (first.x + second.x) / 2,
+    y: (first.y + second.y) / 2,
+  };
+}
+
 function hasAreaCoordinate(area: HejfishAreaLite): area is HejfishAreaLite & { lat: number; lng: number } {
   return typeof area.lat === 'number' && typeof area.lng === 'number' && Number.isFinite(area.lat) && Number.isFinite(area.lng);
 }
 
 function waterLabel(area: HejfishAreaLite) {
   return area.name || `Gewaesser ${area.lat?.toFixed(4)}, ${area.lng?.toFixed(4)}`;
+}
+
+function coordinatesToPath(
+  coordinates: [number, number][],
+  project: (coordinate: [number, number]) => { x: number; y: number }
+) {
+  return coordinates
+    .map((coordinate, index) => {
+      const point = project(coordinate);
+      return `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`;
+    })
+    .join(' ');
+}
+
+function overlayLinePaths(
+  geometry: GeoJsonGeometry,
+  project: (coordinate: [number, number]) => { x: number; y: number }
+) {
+  if (geometry.type === 'LineString') {
+    return [coordinatesToPath(geometry.coordinates, project)];
+  }
+
+  if (geometry.type === 'MultiLineString') {
+    return geometry.coordinates.map((line) => coordinatesToPath(line, project));
+  }
+
+  if (geometry.type === 'Polygon') {
+    return geometry.coordinates.map((ring) => coordinatesToPath(ring, project));
+  }
+
+  if (geometry.type === 'MultiPolygon') {
+    return geometry.coordinates.flatMap((polygon) => (
+      polygon.map((ring) => coordinatesToPath(ring, project))
+    ));
+  }
+
+  return [];
+}
+
+function overlayStroke(feature: HamburgFishingFeature) {
+  const tone = getPermissionTone(feature.properties);
+  if (tone === 'blocked') return 'rgb(0, 112, 255)';
+  if (tone === 'forbidden') return 'rgb(255, 0, 0)';
+
+  return 'rgb(85, 255, 0)';
 }
 
 async function fetchWaterAreas() {
@@ -107,6 +191,8 @@ const LocationPickerMap: React.FC<LocationPickerMapProps> = ({ center, onSelect 
   const centerLng = center.lng;
   const mapRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
+  const activePointersRef = useRef<Map<number, PointerPosition>>(new Map());
+  const pinchRef = useRef<PinchState | null>(null);
   const suppressClusterClickRef = useRef(false);
   const [mapWidth, setMapWidth] = useState(360);
   const [zoom, setZoom] = useState(12);
@@ -114,6 +200,10 @@ const LocationPickerMap: React.FC<LocationPickerMapProps> = ({ center, onSelect 
   const [selectedPoint, setSelectedPoint] = useState(center);
   const [waterAreas, setWaterAreas] = useState<HejfishAreaLite[]>([]);
   const [waterAreasLoading, setWaterAreasLoading] = useState(false);
+  const [fishingOverlayEnabled, setFishingOverlayEnabled] = useState(true);
+  const [fishingOverlayFeatures, setFishingOverlayFeatures] = useState<HamburgFishingFeature[]>([]);
+  const [fishingOverlayLoading, setFishingOverlayLoading] = useState(false);
+  const [fishingOverlayError, setFishingOverlayError] = useState<string | null>(null);
 
   useEffect(() => {
     const nextCenter = { lat: centerLat, lng: centerLng };
@@ -128,6 +218,13 @@ const LocationPickerMap: React.FC<LocationPickerMapProps> = ({ center, onSelect 
     }),
     [mapCenter.lat, mapCenter.lng, zoom]
   );
+  const centerWorldRef = useRef(centerWorld);
+  const zoomRef = useRef(zoom);
+
+  useEffect(() => {
+    centerWorldRef.current = centerWorld;
+    zoomRef.current = zoom;
+  }, [centerWorld, zoom]);
 
   const tiles = useMemo(() => {
     const topLeftX = centerWorld.x - mapWidth / 2;
@@ -158,33 +255,39 @@ const LocationPickerMap: React.FC<LocationPickerMapProps> = ({ center, onSelect 
     return nextTiles;
   }, [centerWorld.x, centerWorld.y, mapWidth, zoom]);
 
+  const visibleBounds = useMemo<MapBounds>(() => {
+    const topLeftX = centerWorld.x - mapWidth / 2;
+    const topLeftY = centerWorld.y - mapHeight / 2;
+    const bottomRightX = centerWorld.x + mapWidth / 2;
+    const bottomRightY = centerWorld.y + mapHeight / 2;
+
+    return {
+      minLng: worldXToLng(topLeftX, zoom),
+      maxLng: worldXToLng(bottomRightX, zoom),
+      minLat: worldYToLat(bottomRightY, zoom),
+      maxLat: worldYToLat(topLeftY, zoom),
+    };
+  }, [centerWorld.x, centerWorld.y, mapWidth, zoom]);
+
   const visibleWaterAreas = useMemo(() => {
     if (waterAreas.length === 0) {
       return [];
     }
 
-    const topLeftX = centerWorld.x - mapWidth / 2;
-    const topLeftY = centerWorld.y - mapHeight / 2;
-    const bottomRightX = centerWorld.x + mapWidth / 2;
-    const bottomRightY = centerWorld.y + mapHeight / 2;
-    const minLng = worldXToLng(topLeftX, zoom);
-    const maxLng = worldXToLng(bottomRightX, zoom);
-    const minLat = worldYToLat(bottomRightY, zoom);
-    const maxLat = worldYToLat(topLeftY, zoom);
-    const lngPadding = Math.abs(maxLng - minLng) * 0.12;
-    const latPadding = Math.abs(maxLat - minLat) * 0.12;
+    const lngPadding = Math.abs(visibleBounds.maxLng - visibleBounds.minLng) * 0.12;
+    const latPadding = Math.abs(visibleBounds.maxLat - visibleBounds.minLat) * 0.12;
 
     return waterAreas.filter((area) => {
       if (!hasAreaCoordinate(area)) {
         return false;
       }
 
-      return area.lat >= minLat - latPadding
-        && area.lat <= maxLat + latPadding
-        && area.lng >= minLng - lngPadding
-        && area.lng <= maxLng + lngPadding;
+      return area.lat >= visibleBounds.minLat - latPadding
+        && area.lat <= visibleBounds.maxLat + latPadding
+        && area.lng >= visibleBounds.minLng - lngPadding
+        && area.lng <= visibleBounds.maxLng + lngPadding;
     });
-  }, [centerWorld.x, centerWorld.y, mapWidth, waterAreas, zoom]);
+  }, [visibleBounds, waterAreas]);
 
   const waterClusters = useMemo(() => {
     if (visibleWaterAreas.length === 0) {
@@ -247,6 +350,29 @@ const LocationPickerMap: React.FC<LocationPickerMapProps> = ({ center, onSelect 
     top: latToWorldY(point.lat, zoom) - centerWorld.y + mapHeight / 2,
   });
 
+  const projectOverlayCoordinate = useCallback((coordinate: [number, number]) => ({
+    x: lngToWorldX(coordinate[0], zoom) - centerWorld.x + mapWidth / 2,
+    y: latToWorldY(coordinate[1], zoom) - centerWorld.y + mapHeight / 2,
+  }), [centerWorld.x, centerWorld.y, mapWidth, zoom]);
+
+  const overlayProjection = useMemo(() => {
+    const linePaths: ProjectedOverlayPath[] = [];
+
+    fishingOverlayFeatures.forEach((feature) => {
+      overlayLinePaths(feature.geometry, projectOverlayCoordinate).forEach((path, index) => {
+        if (path) {
+          linePaths.push({
+            id: `${feature.id}-line-${index}`,
+            feature,
+            d: path,
+          });
+        }
+      });
+    });
+
+    return { linePaths };
+  }, [fishingOverlayFeatures, projectOverlayCoordinate]);
+
   const pointToLocation = (clientX: number, clientY: number) => {
     const rect = mapRef.current?.getBoundingClientRect();
     if (!rect) {
@@ -261,13 +387,83 @@ const LocationPickerMap: React.FC<LocationPickerMapProps> = ({ center, onSelect 
     return { lat, lng };
   };
 
-  const moveCenterByPixels = (worldX: number, worldY: number) => {
-    const tileCount = Math.pow(2, zoom);
+  const moveCenterByPixels = (worldX: number, worldY: number, targetZoom = zoom) => {
+    const tileCount = Math.pow(2, targetZoom);
     const maxWorld = tileSize * tileCount;
-    const lat = clamp(worldYToLat(worldY, zoom), -85, 85);
-    const lng = worldXToLng(((worldX % maxWorld) + maxWorld) % maxWorld, zoom);
+    const lat = clamp(worldYToLat(worldY, targetZoom), -85, 85);
+    const lng = worldXToLng(((worldX % maxWorld) + maxWorld) % maxWorld, targetZoom);
 
     setMapCenter({ lat, lng });
+  };
+
+  const startPinch = () => {
+    const mapElement = mapRef.current;
+    const pointers = Array.from(activePointersRef.current.entries());
+    if (!mapElement || pointers.length < 2) {
+      return;
+    }
+
+    const [firstEntry, secondEntry] = pointers;
+    const first = firstEntry[1];
+    const second = secondEntry[1];
+    const startDistance = getPointerDistance(first, second);
+    if (startDistance < 10) {
+      return;
+    }
+
+    const rect = mapElement.getBoundingClientRect();
+    const midpoint = getPointerMidpoint(first, second);
+    const currentCenterWorld = centerWorldRef.current;
+
+    dragRef.current = null;
+    pinchRef.current = {
+      pointerIds: [firstEntry[0], secondEntry[0]],
+      startDistance,
+      startFocusWorldX: currentCenterWorld.x + midpoint.x - rect.left - rect.width / 2,
+      startFocusWorldY: currentCenterWorld.y + midpoint.y - rect.top - rect.height / 2,
+      startZoom: zoomRef.current,
+    };
+  };
+
+  const updatePinch = () => {
+    const mapElement = mapRef.current;
+    const pinch = pinchRef.current;
+    if (!mapElement || !pinch) {
+      return;
+    }
+
+    const first = activePointersRef.current.get(pinch.pointerIds[0]);
+    const second = activePointersRef.current.get(pinch.pointerIds[1]);
+    if (!first || !second) {
+      return;
+    }
+
+    const nextDistance = getPointerDistance(first, second);
+    if (nextDistance < 10) {
+      return;
+    }
+
+    const rect = mapElement.getBoundingClientRect();
+    const midpoint = getPointerMidpoint(first, second);
+    const zoomDelta = Math.log2(nextDistance / pinch.startDistance);
+    const nextZoom = clamp(Math.round(pinch.startZoom + zoomDelta), minZoom, maxZoom);
+    const focusLat = worldYToLat(pinch.startFocusWorldY, pinch.startZoom);
+    const focusLng = worldXToLng(pinch.startFocusWorldX, pinch.startZoom);
+    const nextFocusWorldX = lngToWorldX(focusLng, nextZoom);
+    const nextFocusWorldY = latToWorldY(focusLat, nextZoom);
+    const nextCenterWorldX = nextFocusWorldX - (midpoint.x - rect.left - rect.width / 2);
+    const nextCenterWorldY = nextFocusWorldY - (midpoint.y - rect.top - rect.height / 2);
+
+    setZoom(nextZoom);
+    zoomRef.current = nextZoom;
+    moveCenterByPixels(nextCenterWorldX, nextCenterWorldY, nextZoom);
+  };
+
+  const clearPointer = (event: React.PointerEvent<HTMLDivElement>) => {
+    activePointersRef.current.delete(event.pointerId);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
   };
 
   const selectCenter = () => {
@@ -344,11 +540,44 @@ const LocationPickerMap: React.FC<LocationPickerMapProps> = ({ center, onSelect 
     };
   }, []);
 
+  useEffect(() => {
+    if (!fishingOverlayEnabled || !intersectsHamburg(visibleBounds)) {
+      setFishingOverlayFeatures([]);
+      setFishingOverlayLoading(false);
+      setFishingOverlayError(null);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    setFishingOverlayLoading(true);
+    setFishingOverlayError(null);
+
+    fetchHamburgFishingOverlay(visibleBounds, controller.signal)
+      .then((features) => {
+        setFishingOverlayFeatures(features);
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        setFishingOverlayFeatures([]);
+        setFishingOverlayError(error instanceof Error ? error.message : 'Overlay konnte nicht geladen werden');
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setFishingOverlayLoading(false);
+        }
+      });
+
+    return () => controller.abort();
+  }, [fishingOverlayEnabled, visibleBounds]);
+
   return (
     <div className="space-y-2">
       <div
         ref={mapRef}
-        className="relative h-[280px] touch-none overflow-hidden rounded-lg border border-slate-800 bg-slate-900"
+        className="relative h-[420px] touch-none overflow-hidden rounded-lg border border-slate-800 bg-slate-900"
         onPointerDown={(event) => {
           if (isControlTarget(event.target)) {
             return;
@@ -360,6 +589,13 @@ const LocationPickerMap: React.FC<LocationPickerMapProps> = ({ center, onSelect 
 
           event.preventDefault();
           event.currentTarget.setPointerCapture(event.pointerId);
+          activePointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+          if (activePointersRef.current.size >= 2) {
+            startPinch();
+            suppressClusterClickRef.current = true;
+            return;
+          }
+
           dragRef.current = {
             pointerId: event.pointerId,
             startX: event.clientX,
@@ -370,6 +606,16 @@ const LocationPickerMap: React.FC<LocationPickerMapProps> = ({ center, onSelect 
           };
         }}
         onPointerMove={(event) => {
+          if (activePointersRef.current.has(event.pointerId)) {
+            activePointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+          }
+
+          if (pinchRef.current) {
+            event.preventDefault();
+            updatePinch();
+            return;
+          }
+
           const drag = dragRef.current;
           if (!drag || drag.pointerId !== event.pointerId) {
             return;
@@ -385,11 +631,24 @@ const LocationPickerMap: React.FC<LocationPickerMapProps> = ({ center, onSelect 
             return;
           }
 
-          const drag = dragRef.current;
-          if (!drag || drag.pointerId !== event.pointerId) {
+          if (pinchRef.current) {
+            clearPointer(event);
+            pinchRef.current = null;
+            dragRef.current = null;
+            suppressClusterClickRef.current = true;
+            window.setTimeout(() => {
+              suppressClusterClickRef.current = false;
+            }, 0);
             return;
           }
 
+          const drag = dragRef.current;
+          if (!drag || drag.pointerId !== event.pointerId) {
+            clearPointer(event);
+            return;
+          }
+
+          clearPointer(event);
           dragRef.current = null;
           if (drag.moved) {
             suppressClusterClickRef.current = true;
@@ -408,6 +667,11 @@ const LocationPickerMap: React.FC<LocationPickerMapProps> = ({ center, onSelect 
           onSelect({ ...location, label: locationLabel(location.lat, location.lng) });
         }}
         onPointerCancel={(event) => {
+          clearPointer(event);
+          if (pinchRef.current) {
+            pinchRef.current = null;
+          }
+
           const drag = dragRef.current;
           if (drag?.pointerId === event.pointerId) {
             dragRef.current = null;
@@ -445,6 +709,23 @@ const LocationPickerMap: React.FC<LocationPickerMapProps> = ({ center, onSelect 
           />
         ))}
         <div className="pointer-events-none absolute inset-0 bg-slate-950/5"></div>
+        {fishingOverlayEnabled && (
+          <svg className="pointer-events-none absolute inset-0 h-full w-full" viewBox={`0 0 ${mapWidth} ${mapHeight}`}>
+            {overlayProjection.linePaths.map((path) => (
+              <path
+                key={path.id}
+                d={path.d}
+                fill="none"
+                stroke={overlayStroke(path.feature)}
+                strokeWidth="2.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeOpacity="1"
+                vectorEffect="non-scaling-stroke"
+              />
+            ))}
+          </svg>
+        )}
         <div className="absolute inset-0">
           {waterClusters.map((cluster) => {
             const area = cluster.areas[0];
@@ -522,11 +803,42 @@ const LocationPickerMap: React.FC<LocationPickerMapProps> = ({ center, onSelect 
             -
           </button>
         </div>
+        <div className="absolute left-2 top-2 flex max-w-[calc(100%-4.5rem)] flex-col gap-1">
+          <button
+            type="button"
+            data-map-control="true"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              setFishingOverlayEnabled((enabled) => !enabled);
+            }}
+            className={`rounded-lg border px-2.5 py-2 text-left text-[10px] font-black uppercase tracking-wide shadow-lg shadow-slate-950/40 transition-colors ${
+              fishingOverlayEnabled
+                ? 'border-emerald-400/50 bg-emerald-400/90 text-slate-950'
+                : 'border-slate-700 bg-slate-950/90 text-slate-300 hover:bg-slate-800'
+            }`}
+            aria-pressed={fishingOverlayEnabled}
+            title={HAMBURG_FISHING_OVERLAY_SOURCE}
+          >
+            Angelkarte
+          </button>
+          {fishingOverlayEnabled && (
+            <div className="pointer-events-none rounded-lg border border-slate-800 bg-slate-950/85 px-2 py-1 text-[9px] font-bold leading-tight text-slate-300 shadow-lg shadow-slate-950/30">
+              <span style={{ color: 'rgb(85, 255, 0)' }}>gruen</span> erlaubt
+              <span className="mx-1" style={{ color: 'rgb(0, 112, 255)' }}>blau</span> nicht moeglich
+              <span style={{ color: 'rgb(255, 0, 0)' }}>rot</span> verboten
+            </div>
+          )}
+        </div>
         <div className="absolute bottom-2 left-2 right-2 flex items-end justify-between gap-2">
           <div className="pointer-events-none rounded bg-slate-950/85 px-2 py-1 text-[9px] font-bold text-slate-300">
-            {waterAreasLoading
-              ? 'Gewaesser laden...'
-              : `${visibleWaterAreas.length} sichtbar - ${zoom >= singleMarkerZoom ? 'Marker' : 'Cluster'}`}
+            {fishingOverlayEnabled && fishingOverlayLoading
+              ? 'Angelkarte laden...'
+              : fishingOverlayEnabled && fishingOverlayError
+                ? 'Angelkarte nicht geladen'
+                : waterAreasLoading
+                  ? 'Gewaesser laden...'
+                  : `${visibleWaterAreas.length} sichtbar - ${zoom >= singleMarkerZoom ? 'Marker' : 'Cluster'}`}
           </div>
           <button
             type="button"
